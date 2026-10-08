@@ -1,0 +1,150 @@
+{
+  "id": "heartbeat1",
+  "name": "Heartbeat watchdog",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "heartbeat",
+        "options": {}
+      },
+      "id": "1a94fdd1-c66b-528c-90f8-9aee126210be",
+      "name": "Heartbeat ping",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "de44ecef-f719-52a1-af07-451d7fabfdf8"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Remember when each job last pinged. Runs on every ping.\nconst job = String($input.first().json.query?.job ?? '');\nif (!/^[A-Za-z0-9_-]{1,64}$/.test(job)) {\n  return [{ json: { ok: false, reason: 'job must be 1-64 chars of A-Z a-z 0-9 _ -' } }];\n}\nconst sd = $getWorkflowStaticData('global');\nsd.lastPing = sd.lastPing || {};\nsd.alerted = sd.alerted || {};\nsd.lastPing[job] = new Date().toISOString();\ndelete sd.alerted[job]; // it is alive again, so it may alert again later\nreturn [{ json: { ok: true, job, at: sd.lastPing[job] } }];"
+      },
+      "id": "bf3d4407-37a1-5c68-805d-2a7b3de4d6da",
+      "name": "Record ping",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "3a6100b5-1f4c-55fd-9650-5ab0e1d2854f",
+      "name": "Check every hour",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// EDIT THIS: job name -> the longest silence you accept, in hours.\nconst EXPECT = {\n  'nightly-backup': 26,\n  'daily-sync': 26,\n};\n\nconst sd = $getWorkflowStaticData('global');\nsd.lastPing = sd.lastPing || {};\nsd.alerted = sd.alerted || {};\nsd.baseline = sd.baseline || {};\nconst now = Date.now();\nconst late = [];\nfor (const [job, maxHours] of Object.entries(EXPECT)) {\n  // A job that has never pinged is measured from the first time this check saw it,\n  // so installing the workflow does not alert immediately.\n  if (!sd.lastPing[job] && !sd.baseline[job]) sd.baseline[job] = new Date(now).toISOString();\n  const since = new Date(sd.lastPing[job] ?? sd.baseline[job]).getTime();\n  const hours = (now - since) / 36e5;\n  if (hours > maxHours && !sd.alerted[job]) {\n    sd.alerted[job] = new Date(now).toISOString(); // one alert per outage\n    late.push(`${job}: ${sd.lastPing[job] ? 'last ping ' + hours.toFixed(1) + ' h ago' : 'no ping since monitoring started ' + hours.toFixed(1) + ' h ago'} (limit ${maxHours} h)`);\n  }\n}\nif (!late.length) return [];\nreturn [{ json: { subject: `Heartbeat missing: ${late.length} job(s)`, text: late.join('\\n') + '\\n\\nIf the job is fine, check that its ping URL is still called at the end of the job.' } }];"
+      },
+      "id": "20aefac9-ef54-5447-b4c1-5afc8cc14ec2",
+      "name": "Find late jobs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "you@example.com",
+        "toEmail": "you@example.com",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "text",
+        "text": "={{ $json.text }}",
+        "options": {}
+      },
+      "id": "a5770864-5254-5f09-ac62-87ff99cf058a",
+      "name": "Email alert",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        440,
+        260
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "Setup: 1) edit EXPECT in 'Find late jobs'. 2) pick your SMTP credential and addresses on 'Email alert'. 3) Publish. 4) At the end of each job, call  GET <this n8n's webhook URL>/webhook/heartbeat?job=nightly-backup",
+        "height": 200,
+        "width": 420
+      },
+      "id": "229f16f6-0c28-55db-a584-e15e1c0d1823",
+      "name": "Setup note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -260
+      ]
+    }
+  ],
+  "connections": {
+    "Heartbeat ping": {
+      "main": [
+        [
+          {
+            "node": "Record ping",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check every hour": {
+      "main": [
+        [
+          {
+            "node": "Find late jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find late jobs": {
+      "main": [
+        [
+          {
+            "node": "Email alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {}
+}
